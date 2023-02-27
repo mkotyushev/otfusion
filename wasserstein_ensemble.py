@@ -42,7 +42,7 @@ def get_histogram(args, idx, cardinality, layer_name, activations=None, return_n
         else:
             return torch.softmax(unnormalized_weights / args.softmax_temperature, dim=0)
 
-def get_wassersteinized_layers_modularized(args, networks, activations=None, eps=1e-7, test_loader=None):
+def get_wassersteinized_layers_modularized(args, networks, T_vars_pre_computed=None, activations=None, eps=1e-7, test_loader=None):
     '''
     Two neural networks that have to be averaged in geometric manner (i.e. layerwise).
     The 1st network is aligned with respect to the other via wasserstein distance.
@@ -51,14 +51,17 @@ def get_wassersteinized_layers_modularized(args, networks, activations=None, eps
     :param networks: list of networks
     :param activations: If not None, use it to build the activation histograms.
     Otherwise assumes uniform distribution over neurons in a layer.
-    :return: list of layer weights 'wassersteinized'
+    :return: 
+        list of layer weights 'wassersteinized', 
+        list of mapped layer weights, 
+        list of transport maps
     '''
 
     # simple_model_0, simple_model_1 = networks[0], networks[1]
     # simple_model_0 = get_trained_model(0, model='simplenet')
     # simple_model_1 = get_trained_model(1, model='simplenet')
 
-    avg_aligned_layers = []
+    avg_aligned_layers, aligned_layers, T_vars = [], [], []
     # cumulative_T_var = None
     T_var = None
     # print(list(networks[0].parameters()))
@@ -78,7 +81,7 @@ def get_wassersteinized_layers_modularized(args, networks, activations=None, eps
     for idx, ((layer0_name, fc_layer0_weight), (layer1_name, fc_layer1_weight)) in \
             enumerate(zip(networks[0].named_parameters(), networks[1].named_parameters())):
 
-        assert fc_layer0_weight.shape == fc_layer1_weight.shape
+        # assert fc_layer0_weight.shape == fc_layer1_weight.shape
         print("Previous layer shape is ", previous_layer_shape)
         previous_layer_shape = fc_layer1_weight.shape
 
@@ -96,8 +99,16 @@ def get_wassersteinized_layers_modularized(args, networks, activations=None, eps
             fc_layer1_weight_data = fc_layer1_weight.data.view(fc_layer1_weight.shape[0], fc_layer1_weight.shape[1], -1)
         else:
             is_conv = False
-            fc_layer0_weight_data = fc_layer0_weight.data
-            fc_layer1_weight_data = fc_layer1_weight.data
+            if len(layer_shape) < 2:  # bias
+                fc_layer0_weight_data = fc_layer0_weight.data[None, :]
+                fc_layer1_weight_data = fc_layer1_weight.data[None, :]
+                # fc_layer0_weight_data = fc_layer0_weight.data[:, None]
+                # fc_layer1_weight_data = fc_layer1_weight.data[:, None]
+            else:
+                fc_layer0_weight_data = fc_layer0_weight.data
+                fc_layer1_weight_data = fc_layer1_weight.data
+
+        print(f'Layer {layer0_name, layer1_name} shape is {fc_layer0_weight_data.shape} and {fc_layer1_weight_data.shape}')
 
         if idx == 0:
             if is_conv:
@@ -127,19 +138,27 @@ def get_wassersteinized_layers_modularized(args, networks, activations=None, eps
                     fc_layer1_weight_data.view(fc_layer1_weight_data.shape[0], -1)
                 )
             else:
-                if fc_layer0_weight.data.shape[1] != T_var.shape[0]:
+                print(f'fc_layer0_weight_data.shape = {fc_layer0_weight_data.shape}')
+                print(f'T_var.shape = {T_var.shape}')
+                if 'bias' in layer0_name:
+                    aligned_wt = torch.matmul(fc_layer0_weight_data, T_var).t()
+                elif fc_layer0_weight_data.shape[1] != T_var.shape[0]:
+                    print(fc_layer0_weight_data.shape, T_var.shape)
                     # Handles the switch from convolutional layers to fc layers
-                    fc_layer0_unflattened = fc_layer0_weight.data.view(fc_layer0_weight.shape[0], T_var.shape[0], -1).permute(2, 0, 1)
+                    fc_layer0_unflattened = fc_layer0_weight_data.view(fc_layer0_weight.shape[0], T_var.shape[0], -1).permute(2, 0, 1)
                     aligned_wt = torch.bmm(
                         fc_layer0_unflattened,
                         T_var.unsqueeze(0).repeat(fc_layer0_unflattened.shape[0], 1, 1)
                     ).permute(1, 2, 0)
                     aligned_wt = aligned_wt.contiguous().view(aligned_wt.shape[0], -1)
+                
                 else:
                     # print("layer data (aligned) is ", aligned_wt, fc_layer1_weight_data)
-                    aligned_wt = torch.matmul(fc_layer0_weight.data, T_var)
+                    aligned_wt = torch.matmul(fc_layer0_weight_data, T_var)
+                print(f'aligned_wt shape is {aligned_wt.shape}')
+                print(f'fc_layer1_weight_data shape is {fc_layer1_weight_data.shape}')
                 # M = cost_matrix(aligned_wt, fc_layer1_weight)
-                M = ground_metric_object.process(aligned_wt, fc_layer1_weight)
+                M = ground_metric_object.process(aligned_wt, fc_layer1_weight_data)
                 print("ground metric is ", M)
             if args.skip_last_layer and idx == (num_layers - 1):
                 print("Simple averaging of last layer weights. NO transport map needs to be computed")
@@ -148,6 +167,8 @@ def get_wassersteinized_layers_modularized(args, networks, activations=None, eps
                                           args.ensemble_step * fc_layer1_weight)
                 else:
                     avg_aligned_layers.append((aligned_wt + fc_layer1_weight)/2)
+                T_vars.append((layer0_name, torch.diag(torch.ones(fc_layer1_weight.shape[1]))))
+                aligned_layers.append(aligned_wt)
                 return avg_aligned_layers
 
         if args.importance is None or (idx == num_layers -1):
@@ -160,48 +181,56 @@ def get_wassersteinized_layers_modularized(args, networks, activations=None, eps
             print(mu, nu)
             assert args.proper_marginals
 
-        cpuM = M.data.cpu().numpy()
-        if args.exact:
-            T = ot.emd(mu, nu, cpuM)
-        else:
-            T = ot.bregman.sinkhorn(mu, nu, cpuM, reg=args.reg)
-        # T = ot.emd(mu, nu, log_cpuM)
-
-        if args.gpu_id!=-1:
-            T_var = torch.from_numpy(T).cuda(args.gpu_id).float()
-        else:
-            T_var = torch.from_numpy(T).float()
-
-        # torch.set_printoptions(profile="full")
-        print("the transport map is ", T_var)
-        # torch.set_printoptions(profile="default")
-
-        if args.correction:
-            if not args.proper_marginals:
-                # think of it as m x 1, scaling weights for m linear combinations of points in X
-                if args.gpu_id != -1:
-                    # marginals = torch.mv(T_var.t(), torch.ones(T_var.shape[0]).cuda(args.gpu_id))  # T.t().shape[1] = T.shape[0]
-                    marginals = torch.ones(T_var.shape[0]).cuda(args.gpu_id) / T_var.shape[0]
-                else:
-                    # marginals = torch.mv(T_var.t(),
-                    #                      torch.ones(T_var.shape[0]))  # T.t().shape[1] = T.shape[0]
-                    marginals = torch.ones(T_var.shape[0]) / T_var.shape[0]
-                marginals = torch.diag(1.0/(marginals + eps))  # take inverse
-                T_var = torch.matmul(T_var, marginals)
+        if 'bias' in layer0_name:
+            pass
+        elif T_vars_pre_computed is None:
+            cpuM = M.data.cpu().numpy()
+            print(f'mu shape is {mu.shape}')
+            print(f'nu shape is {nu.shape}')
+            print(f'cpuM shape is {cpuM.shape}')
+            if args.exact:
+                T = ot.emd(mu, nu, cpuM)
             else:
-                # marginals_alpha = T_var @ torch.ones(T_var.shape[1], dtype=T_var.dtype).to(device)
-                marginals_beta = T_var.t() @ torch.ones(T_var.shape[0], dtype=T_var.dtype).to(device)
+                T = ot.bregman.sinkhorn(mu, nu, cpuM, reg=args.reg)
+            # T = ot.emd(mu, nu, log_cpuM)
 
-                marginals = (1 / (marginals_beta + eps))
-                print("shape of inverse marginals beta is ", marginals_beta.shape)
-                print("inverse marginals beta is ", marginals_beta)
+            if args.gpu_id!=-1:
+                T_var = torch.from_numpy(T).cuda(args.gpu_id).float()
+            else:
+                T_var = torch.from_numpy(T).float()
 
-                T_var = T_var * marginals
-                # i.e., how a neuron of 2nd model is constituted by the neurons of 1st model
-                # this should all be ones, and number equal to number of neurons in 2nd model
-                print(T_var.sum(dim=0))
-                # assert (T_var.sum(dim=0) == torch.ones(T_var.shape[1], dtype=T_var.dtype).to(device)).all()
+            # torch.set_printoptions(profile="full")
+            print("the transport map is ", T_var)
+            # torch.set_printoptions(profile="default")
 
+            if args.correction:
+                if not args.proper_marginals:
+                    # think of it as m x 1, scaling weights for m linear combinations of points in X
+                    if args.gpu_id != -1:
+                        # marginals = torch.mv(T_var.t(), torch.ones(T_var.shape[0]).cuda(args.gpu_id))  # T.t().shape[1] = T.shape[0]
+                        marginals = torch.ones(T_var.shape[0]).cuda(args.gpu_id) / T_var.shape[0]
+                    else:
+                        # marginals = torch.mv(T_var.t(),
+                        #                      torch.ones(T_var.shape[0]))  # T.t().shape[1] = T.shape[0]
+                        marginals = torch.ones(T_var.shape[0]) / T_var.shape[0]
+                    marginals = torch.diag(1.0/(marginals + eps))  # take inverse
+                    T_var = torch.matmul(T_var, marginals)
+                else:
+                    # marginals_alpha = T_var @ torch.ones(T_var.shape[1], dtype=T_var.dtype).to(device)
+                    marginals_beta = T_var.t() @ torch.ones(T_var.shape[0], dtype=T_var.dtype).to(device)
+
+                    marginals = (1 / (marginals_beta + eps))
+                    print("shape of inverse marginals beta is ", marginals_beta.shape)
+                    print("inverse marginals beta is ", marginals_beta)
+
+                    T_var = T_var * marginals
+                    # i.e., how a neuron of 2nd model is constituted by the neurons of 1st model
+                    # this should all be ones, and number equal to number of neurons in 2nd model
+                    print(T_var.sum(dim=0))
+                    # assert (T_var.sum(dim=0) == torch.ones(T_var.shape[1], dtype=T_var.dtype).to(device)).all()
+        else:
+            T_var = T_vars_pre_computed[idx]
+        
         if args.debug:
             if idx == (num_layers - 1):
                 print("there goes the last transport map: \n ", T_var)
@@ -218,7 +247,11 @@ def get_wassersteinized_layers_modularized(args, networks, activations=None, eps
             print("this is past correction for weight mode")
             print("Shape of aligned wt is ", aligned_wt.shape)
             print("Shape of fc_layer0_weight_data is ", fc_layer0_weight_data.shape)
-            t_fc0_model = torch.matmul(T_var.t(), aligned_wt.contiguous().view(aligned_wt.shape[0], -1))
+            if 'bias' in layer0_name:
+                # here, no need to align so as T_var is not changed
+                t_fc0_model = aligned_wt
+            else:
+                t_fc0_model = torch.matmul(T_var.t(), aligned_wt.contiguous().view(aligned_wt.shape[0], -1))
         else:
             t_fc0_model = torch.matmul(T_var.t(), fc_layer0_weight_data.view(fc_layer0_weight_data.shape[0], -1))
 
@@ -231,6 +264,8 @@ def get_wassersteinized_layers_modularized(args, networks, activations=None, eps
         if is_conv and layer_shape != geometric_fc.shape:
             geometric_fc = geometric_fc.view(layer_shape)
         avg_aligned_layers.append(geometric_fc)
+        aligned_layers.append(t_fc0_model)
+        T_vars.append((layer0_name, T_var))
 
         # get the performance of the model 0 aligned with respect to the model 1
         if args.eval_aligned:
@@ -244,7 +279,7 @@ def get_wassersteinized_layers_modularized(args, networks, activations=None, eps
             if idx == (num_layers - 1):
                 setattr(args, 'model0_aligned_acc', acc)
 
-    return avg_aligned_layers
+    return avg_aligned_layers, aligned_layers, T_vars
 
 
 def print_stats(arr, nick=""):
