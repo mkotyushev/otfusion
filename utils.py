@@ -6,12 +6,8 @@ import collections
 import numpy as np
 import ot
 import sys
-PATH_TO_CIFAR = "./cifar/"
-sys.path.append(PATH_TO_CIFAR)
 import train as cifar_train
-PATH_TO_VGG = "./cifar/models/"
-sys.path.append(PATH_TO_VGG)
-import vgg
+import models.vgg as vgg
 import partition
 
 def get_timestamp_other():
