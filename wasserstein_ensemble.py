@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import ot
 import torch
 import numpy as np
@@ -52,16 +53,16 @@ def get_wassersteinized_layers_modularized(args, networks, T_vars_pre_computed=N
     :param activations: If not None, use it to build the activation histograms.
     Otherwise assumes uniform distribution over neurons in a layer.
     :return: 
-        list of layer weights 'wassersteinized', 
-        list of mapped layer weights, 
-        list of transport maps
+        dict of layer weights 'wassersteinized', 
+        dict of mapped layer weights, 
+        dict of transport maps
     '''
 
     # simple_model_0, simple_model_1 = networks[0], networks[1]
     # simple_model_0 = get_trained_model(0, model='simplenet')
     # simple_model_1 = get_trained_model(1, model='simplenet')
 
-    avg_aligned_layers, aligned_layers, T_vars = [], [], []
+    avg_aligned_layers, aligned_layers, T_vars = OrderedDict(), OrderedDict(), OrderedDict()
     # cumulative_T_var = None
     T_var = None
     # print(list(networks[0].parameters()))
@@ -163,13 +164,13 @@ def get_wassersteinized_layers_modularized(args, networks, T_vars_pre_computed=N
             if args.skip_last_layer and idx == (num_layers - 1):
                 print("Simple averaging of last layer weights. NO transport map needs to be computed")
                 if args.ensemble_step != 0.5:
-                    avg_aligned_layers.append((1 - args.ensemble_step) * aligned_wt +
+                    avg_aligned_layers[layer0_name] = ((1 - args.ensemble_step) * aligned_wt +
                                           args.ensemble_step * fc_layer1_weight)
                 else:
-                    avg_aligned_layers.append((aligned_wt + fc_layer1_weight)/2)
-                T_vars.append((layer0_name, torch.diag(torch.ones(fc_layer1_weight.shape[1]))))
-                aligned_layers.append(aligned_wt)
-                return avg_aligned_layers
+                    avg_aligned_layers[layer0_name] = ((aligned_wt + fc_layer1_weight)/2)
+                T_vars[layer0_name] = torch.diag(torch.ones(fc_layer1_weight.shape[1]))
+                aligned_layers[layer0_name] = aligned_wt
+                return avg_aligned_layers, aligned_layers, T_vars
 
         if args.importance is None or (idx == num_layers -1):
             mu = get_histogram(args, 0, mu_cardinality, layer0_name)
@@ -263,9 +264,9 @@ def get_wassersteinized_layers_modularized(args, networks, T_vars_pre_computed=N
             geometric_fc = (t_fc0_model + fc_layer1_weight_data.view(fc_layer1_weight_data.shape[0], -1))/2
         if is_conv and layer_shape != geometric_fc.shape:
             geometric_fc = geometric_fc.view(layer_shape)
-        avg_aligned_layers.append(geometric_fc)
-        aligned_layers.append(t_fc0_model)
-        T_vars.append((layer0_name, T_var))
+        avg_aligned_layers[layer0_name] = geometric_fc
+        aligned_layers[layer0_name] = t_fc0_model
+        T_vars[layer0_name] = T_var
 
         # get the performance of the model 0 aligned with respect to the model 1
         if args.eval_aligned:
@@ -371,8 +372,19 @@ def _get_layer_weights(layer_weight, is_conv):
     if is_conv:
         # For convolutional layers, it is (#out_channels, #in_channels, height, width)
         layer_weight_data = layer_weight.data.view(layer_weight.shape[0], layer_weight.shape[1], -1)
+        # TODO: handle bias for conv layers
     else:
-        layer_weight_data = layer_weight.data
+        if layer_weight.dim() == 2:
+            # For linear layers, it is (#out_channels, #in_channels)
+            layer_weight_data = layer_weight.data
+        elif layer_weight.dim() == 1:
+            # For bias, it is (#out_channels)
+            layer_weight_data = layer_weight.data[None, :]
+        else:
+            raise ValueError(
+                f'Unexpected dimensionality of layer weight: '
+                f'is_conv == {is_conv}, layer_weight.dim() == {layer_weight.dim()}'
+            )
 
     return layer_weight_data
 
