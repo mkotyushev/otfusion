@@ -61,9 +61,10 @@ class GroundMetric:
     def _cost_matrix_xy(self, x, y, p=2, squared = True):
         # TODO: Use this to guarantee reproducibility of previous results and then move onto better way
         "Returns the matrix of $|x_i-y_j|^p$."
-        x_col = x.unsqueeze(1)
-        y_lin = y.unsqueeze(0)
-        c = torch.sum((torch.abs(x_col - y_lin)) ** p, 2)
+        # x_col = x.unsqueeze(1)
+        # y_lin = y.unsqueeze(0)
+        # c = torch.sum((torch.abs(x_col - y_lin)) ** p, 2)
+        c = torch.cdist(x.unsqueeze(0), y.unsqueeze(0), p=p).squeeze(0)
         if not squared:
             print("dont leave off the squaring of the ground metric")
             c = c ** (1/2)

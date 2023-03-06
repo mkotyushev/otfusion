@@ -12,9 +12,22 @@ import compute_activations
 
 def cost_matrix(x, y, p=2):
     "Returns the matrix of $|x_i-y_j|^p$."
-    x_col = x.unsqueeze(1)
-    y_lin = y.unsqueeze(0)
-    c = torch.sum((torch.abs(x_col - y_lin)) ** p, 2)
+    c = torch.cdist(x.unsqueeze(0), y.unsqueeze(0), p=p).squeeze(0)
+
+    # c = torch.zeros(
+    #     (x.shape[0], y.shape[0]), 
+    #     dtype=torch.float32, 
+    #     device=x.device, 
+    #     requires_grad=False
+    # )
+    # for x_index in range(x.shape[0]):
+    #     for y_index in range(y.shape[0]):
+    #         c[x_index, y_index] = ((x[x_index] - y[y_index]) ** p).sum()
+    
+    # x_col = x.unsqueeze(1)
+    # y_lin = y.unsqueeze(0)
+    # c = torch.sum((torch.abs(x_col - y_lin)) ** p, 2)
+
     return c
 
 def get_histogram(args, idx, cardinality, layer_name, activations=None, return_numpy = True, float64=False):
