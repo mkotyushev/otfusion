@@ -1,5 +1,5 @@
 import torch
-from utils import isnan
+from otfusion.utils import isnan
 
 class GroundMetric:
     """

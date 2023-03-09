@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import parameters
-import utils
+import otfusion.utils as utils 
 from data import get_dataloader
 import routines
 import baseline

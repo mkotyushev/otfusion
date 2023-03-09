@@ -4,7 +4,7 @@ import routines
 import baseline
 import wasserstein_ensemble
 import os
-import utils
+import otfusion.utils as utils 
 import numpy as np
 import sys
 import torch

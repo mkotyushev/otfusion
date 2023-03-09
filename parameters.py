@@ -1,9 +1,9 @@
 import argparse
-from utils import dotdict, get_timestamp_other, mkdir
+from otfusion.utils import dotdict, get_timestamp_other, mkdir
 import json
 import copy
 import os
-import utils
+import otfusion.utils as utils 
 
 # commenting this now
 def get_deprecated_params_vgg_cifar():

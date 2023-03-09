@@ -1,5 +1,5 @@
 import sys
-import utils as myutils
+import otfusion.utils as myutils
 PATH_TO_CIFAR = "./cifar/"
 sys.path.append(PATH_TO_CIFAR)
 import train as cifar_train

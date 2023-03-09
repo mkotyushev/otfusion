@@ -5,7 +5,7 @@ import baseline
 import wasserstein_ensemble
 
 import os
-import utils as myutils
+import otfusion.utils as myutils
 import sys
 PATH_TO_CIFAR = "./cifar/"
 sys.path.append(PATH_TO_CIFAR)
